@@ -5,94 +5,106 @@ impl CachedTreeHash for u64 {
     type Item = Self;
 
     fn build_tree_hash_cache(&self) -> Result<TreeHashCache, Error> {
-        Ok(TreeHashCache::from_bytes(merkleize(ssz_encode(self)))?)
+        let single_leaf = merkleize(ssz_encode(self))?;
+
+        Ok(TreeHashCache::from_bytes(single_leaf)?)
+    }
+
+    fn num_packable_bytes(&self) -> usize {
+        8
     }
 
     fn num_bytes(&self) -> usize {
         8
     }
 
-    fn offsets(&self) -> Result<Vec<usize>, Error> {
-        Err(Error::ShouldNotProduceBTreeOverlay)
-    }
-
-    fn num_child_nodes(&self) -> usize {
-        0
-    }
-
-    fn cached_hash_tree_root(
+    fn packable_bytes(
         &self,
-        other: &Self,
+        _other: &Self,
+        _cache: &mut TreeHashCache,
+        _offset: usize,
+    ) -> Result<Vec<u8>, Error> {
+        // Ideally we would try and read from the cache here, however we skip that for simplicity.
+        Ok(ssz_encode(self))
+    }
+
+    fn update_cache(
+        &self,
+        other: &Self::Item,
         cache: &mut TreeHashCache,
-        chunk: usize,
+        offset: usize,
     ) -> Result<usize, Error> {
         if self != other {
-            let leaf = merkleize(ssz_encode(self));
-            cache.modify_chunk(chunk, &leaf)?;
+            let leaf = merkleize(ssz_encode(self))?;
+            cache.modify_chunk(offset, &leaf)?;
         }
 
-        Ok(chunk + 1)
+        Ok(offset + 1)
     }
 }
 
-/*
 impl<T> CachedTreeHash for Vec<T>
 where
     T: CachedTreeHash + Encodable,
+    <T as CachedTreeHash>::Item: CachedTreeHash,
 {
-    type Item = Self;
+    type Item = Vec<T>;
 
     fn build_tree_hash_cache(&self) -> Result<TreeHashCache, Error> {
-        let num_packed_bytes = self.num_bytes();
-        let num_leaves = num_sanitized_leaves(num_packed_bytes);
+        let leaves = build_vec_leaves(self)?;
+        let merkle_tree = merkleize(leaves)?;
+        let mut cache = TreeHashCache::from_bytes(merkle_tree)?;
 
-        let mut packed = Vec::with_capacity(num_leaves * HASHSIZE);
+        cache.mix_in_length(0, self.len())?;
 
-        for item in self {
-            packed.append(&mut ssz_encode(item));
-        }
+        Ok(cache)
+    }
 
-        let packed = sanitise_bytes(packed);
-
-        merkleize(packed)
+    fn num_packable_bytes(&self) -> usize {
+        HASHSIZE
     }
 
     fn num_bytes(&self) -> usize {
         self.iter().fold(0, |acc, item| acc + item.num_bytes())
     }
 
-    fn offsets(&self) -> Result<Vec<usize>, Error> {
-        Err(Error::ShouldNotProduceBTreeOverlay)
-    }
-
     fn num_child_nodes(&self) -> usize {
+        // TODO: this is probably wrong
         0
     }
 
-    fn cached_hash_tree_root(
+    fn update_cache(
         &self,
-        other: &Self,
+        other: &Self::Item,
         cache: &mut TreeHashCache,
         chunk: usize,
     ) -> Result<usize, Error> {
         let num_packed_bytes = self.num_bytes();
         let num_leaves = num_sanitized_leaves(num_packed_bytes);
-
         if num_leaves != num_sanitized_leaves(other.num_bytes()) {
             panic!("Need to handle a change in leaf count");
         }
 
-        let mut packed = Vec::with_capacity(num_leaves * HASHSIZE);
+        let overlay = BTreeOverlay::new(self, chunk)?;
 
-        // TODO: try and avoid fully encoding the whole list
-        for item in self {
-            packed.append(&mut ssz_encode(item));
+        // Build an output vec with an appropriate capacity.
+        let mut leaves = Vec::with_capacity(leaves_byte_len(self));
+
+        // TODO: check lens are equal.
+
+        //  Build the leaves.
+        let mut offset = chunk;
+        for (i, item) in self.iter().enumerate() {
+            leaves.append(&mut item.packable_bytes(&other[i], cache, offset)?);
+            offset += 1;
         }
 
-        let packed = sanitise_bytes(packed);
+        // Ensure the leaves are a power-of-two number of chunks
+        pad_leaves(&mut leaves);
 
-        let num_nodes = num_nodes(num_leaves);
-        let num_internal_nodes = num_nodes - num_leaves;
+        /*
+        // TODO: try and avoid serializing all the leaves.
+        let leaves = build_vec_leaves(self)?;
 
         {
             let mut chunk = chunk + num_internal_nodes;
@@ -109,8 +121,82 @@ where
                 cache.modify_chunk(chunk, &cache.hash_children(chunk)?)?;
             }
         }
+        */
 
-        Some(chunk + num_nodes)
+        Ok(chunk + 42)
     }
+}
+
+fn build_vec_leaves_with_cache<T>(
+    vec: &Vec<T>,
+    other_vec: &Vec<T::Item>,
+    cache: &mut TreeHashCache,
+    mut offset: usize,
+) -> Result<Vec<u8>, Error>
+where
+    T: CachedTreeHash + Encodable,
+    <T as CachedTreeHash>::Item: CachedTreeHash,
+{
+    // Build an output vec with an appropriate capacity.
+    let mut leaves = Vec::with_capacity(leaves_byte_len(vec));
+
+    // TODO: check lens are equal.
+
+    //  Build the leaves.
+    for (i, item) in vec.iter().enumerate() {
+        leaves.append(&mut item.packable_bytes(&other_vec[i], cache, offset)?);
+        offset += 1;
+    }
+
+    // Ensure the leaves are a power-of-two number of chunks
+    pad_leaves(&mut leaves);
+
+    Ok(leaves)
+}
+
+fn build_vec_leaves<T>(vec: &Vec<T>) -> Result<Vec<u8>, Error>
+where
+    T: CachedTreeHash + Encodable,
+{
+    // Build an output vec with an appropriate capacity.
+    let mut leaves = Vec::with_capacity(leaves_byte_len(vec));
+
+    //  Build the leaves.
+    for item in vec {
+        leaves.append(&mut ssz_encode(item));
+    }
+
+    // Ensure the leaves are a power-of-two number of chunks
+    pad_leaves(&mut leaves);
+
+    Ok(leaves)
+}
+
+/// Returns the number of bytes required to store the leaves for some `vec`.
+fn leaves_byte_len<T>(vec: &Vec<T>) -> usize
+where
+    T: CachedTreeHash + Encodable,
+{
+    let num_packed_bytes = vec.num_bytes();
+    let num_leaves = num_sanitized_leaves(num_packed_bytes);
+    num_leaves * HASHSIZE
+}
+
+/*
+fn merkleize_vec<T>(vec: &Vec<T>) -> Result<Vec<u8>, Error>
+where
+    T: CachedTreeHash + Encodable,
+{
+    // Build an output vec with an appropriate capacity.
+    let num_packed_bytes = vec.num_bytes();
+    let num_leaves = num_sanitized_leaves(num_packed_bytes);
+    let mut leaves = Vec::with_capacity(num_leaves * HASHSIZE);
+
+    //  Build the leaves.
+    for item in vec {
+        leaves.append(&mut ssz_encode(item));
+    }
+
+    merkleize(leaves)
 }
 */

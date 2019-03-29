@@ -222,7 +222,7 @@ fn partial_modification_to_inner_struct() {
         int_to_bytes32(5),
         vec![0; 32], // padding
     ];
-    let mut merkle = merkleize(join(leaves));
+    let mut merkle = merkleize(join(leaves)).unwrap();
     merkle.splice(4 * 32..5 * 32, inner_bytes);
 
     assert_eq!(merkle.len() / HASHSIZE, 13);
@@ -278,7 +278,7 @@ fn partial_modification_to_outer() {
         int_to_bytes32(42),
         vec![0; 32], // padding
     ];
-    let mut merkle = merkleize(join(leaves));
+    let mut merkle = merkleize(join(leaves)).unwrap();
     merkle.splice(4 * 32..5 * 32, inner_bytes);
 
     assert_eq!(merkle.len() / HASHSIZE, 13);
@@ -317,7 +317,7 @@ fn outer_builds() {
         int_to_bytes32(5),
         vec![0; 32], // padding
     ];
-    let mut merkle = merkleize(join(leaves));
+    let mut merkle = merkleize(join(leaves)).unwrap();
     merkle.splice(4 * 32..5 * 32, inner_bytes);
 
     assert_eq!(merkle.len() / HASHSIZE, 13);
@@ -407,7 +407,7 @@ fn merkleize_odd() {
         int_to_bytes32(5),
     ]);
 
-    let merkle = merkleize(sanitise_bytes(data));
+    let merkle = merkleize(sanitise_bytes(data)).unwrap();
 
     let expected_len = num_nodes(8) * BYTES_PER_CHUNK;
 
@@ -463,7 +463,7 @@ fn generic_test(index: usize) {
 
     data[index] = int_to_bytes32(42);
 
-    let expected = merkleize(join(data));
+    let expected = merkleize(join(data)).unwrap();
 
     assert_eq!(expected, new_cache);
 }
@@ -484,7 +484,7 @@ fn inner_builds() {
     let data4 = int_to_bytes32(4);
 
     let data = join(vec![data1, data2, data3, data4]);
-    let expected = merkleize(data);
+    let expected = merkleize(data).unwrap();
 
     let inner = Inner {
         a: 1,
@@ -512,7 +512,7 @@ fn merkleize_4_leaves() {
         data4.clone(),
     ]);
 
-    let cache = merkleize(data);
+    let cache = merkleize(data).unwrap();
 
     let hash_12 = {
         let mut joined = vec![];
