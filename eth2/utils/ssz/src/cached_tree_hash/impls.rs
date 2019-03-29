@@ -16,14 +16,8 @@ impl CachedTreeHash<u64> for u64 {
         8
     }
 
-    fn packable_bytes(
-        &self,
-        _other: &u64,
-        _cache: &mut TreeHashCache,
-        _offset: usize,
-    ) -> Result<Vec<u8>, Error> {
-        // Ideally we would try and read from the cache here, however we skip that for simplicity.
-        Ok(ssz_encode(self))
+    fn item_type() -> ItemType {
+        ItemType::Basic
     }
 
     fn update_cache(
@@ -55,6 +49,33 @@ where
         Ok(cache)
     }
 
+    fn item_type() -> ItemType {
+        ItemType::Composite
+    }
+
+    fn offsets(&self) -> Result<Vec<usize>, Error> {
+        // As `T::item_type()` is a static method on a type and a vec is a collection of identical
+        // types, it's impossible for `Vec<T>` to contain two elements with a distinct `ItemType`.
+        let offsets: Vec<usize> = match T::item_type() {
+            ItemType::Basic => {
+                let num_packed_bytes = self.num_bytes();
+                let num_leaves = num_sanitized_leaves(num_packed_bytes);
+
+                (0..num_leaves).collect()
+            }
+            ItemType::Composite => {
+                self
+                    .iter()
+                    .map(|item| {
+                        item.offsets().iter().fold(0, |acc, o| acc + 0)
+                    })
+                    .collect()
+            }
+        };
+
+        Ok(offsets)
+    }
+
     fn num_packable_bytes(&self) -> usize {
         HASHSIZE
     }
@@ -72,7 +93,7 @@ where
         &self,
         other: &Vec<T>,
         cache: &mut TreeHashCache,
-        chunk: usize,
+        offset: usize,
     ) -> Result<usize, Error> {
         let num_packed_bytes = self.num_bytes();
         let num_leaves = num_sanitized_leaves(num_packed_bytes);
@@ -80,20 +101,20 @@ where
             panic!("Need to handle a change in leaf count");
         }
 
-        let _overlay = BTreeOverlay::new(self, chunk)?;
+        // As `T::item_type()` is a static method on a type and a vec is a collection of identical
+        // types, it's impossible for `Vec<T>` to contain two elements with a distinct `ItemType`.
+        let leaves = match T::item_type() {
+            ItemType::Basic => panic!("TODO"),
+            ItemType::Composite => update_cache_of_composites(self, other, cache, offset)
+        }?;
 
-        // Build an output vec with an appropriate capacity.
-        let mut leaves = Vec::with_capacity(leaves_byte_len(self));
+        /*
+        let overlay = BTreeOverlay::new(self, chunk)?;
+
+        let unpadded_leaves = build_vec_leaves_with_cache(self, other, cache, overlay.first_leaf_node()?);
 
         // TODO: check lens are equal.
 
-        //  Build the leaves.
-        let mut offset = chunk;
-        for i in 0..self.len() {
-            leaves.append(&mut self[i].packable_bytes(&other[i], cache, offset)?);
-            offset += 1;
-        }
-        /*
         for (i, item) in self.iter().enumerate() {
             leaves.append(&mut item.packable_bytes(&other[i], cache, offset)?);
             offset += 1;
@@ -101,7 +122,7 @@ where
         */
 
         // Ensure the leaves are a power-of-two number of chunks
-        pad_leaves(&mut leaves);
+        // pad_leaves(&mut leaves);
 
         /*
         // TODO: try and avoid serializing all the leaves.
@@ -124,38 +145,76 @@ where
         }
         */
 
-        Ok(chunk + 42)
+        Ok(next_node)
     }
 }
 
-/*
+fn get_leaves_for_composites<T>(
+    new_vec: &Vec<T>,
+    old_vec: &Vec<T>,
+    cache: &mut TreeHashCache,
+    offset: usize,
+) -> Result<usize, Error>
+where
+    T: CachedTreeHash<T> + Encodable,
+{
+    assert_eq!(T::item_type(), ItemType::Composite);
+
+    // Build an output vec with an appropriate capacity.
+    let mut leaves = Vec::with_capacity(leaves_byte_len(new_vec));
+
+    //  Build the leaves.
+    for (i, item) in new_vec.iter().enumerate() {
+        if i < old_vec.len() {
+            offset = item.update_cache(&old_vec[i], cache, offset)?;
+        } else {
+            let cache = item.build_tree_hash_cache()?;
+            leaves.append(&mut cache.into_merkle_tree());
+
+            offset = overlay.next_node;
+        }
+    }
+}
+
 fn build_vec_leaves_with_cache<T>(
-    vec: &Vec<T::Item>,
-    other_vec: &Vec<T::Item>,
+    new_vec: &Vec<T>,
+    old_vec: &Vec<T>,
     cache: &mut TreeHashCache,
     mut offset: usize,
 ) -> Result<Vec<u8>, Error>
 where
-    T: CachedTreeHash + Encodable,
-    <T as CachedTreeHash>::Item: CachedTreeHash + Encodable,
+    T: CachedTreeHash<T> + Encodable,
 {
     // Build an output vec with an appropriate capacity.
-    let mut leaves = Vec::with_capacity(leaves_byte_len(vec));
-
-    // TODO: check lens are equal.
+    let mut leaves = Vec::with_capacity(leaves_byte_len(new_vec));
 
     //  Build the leaves.
-    for (i, item) in vec.iter().enumerate() {
-        leaves.append(&mut item.packable_bytes(&other_vec[i], cache, offset)?);
-        offset += 1;
+    for (i, item) in new_vec.iter().enumerate() {
+        // As `T::item_type()` is a static method on a type and a vec is a collection of identical
+        // types, it's impossible for `Vec<T>` to contain two elements with a distinct `ItemType`.
+        match T::item_type() {
+            ItemType::Basic => leaves.append(&mut ssz_encode(item)),
+            ItemType::Composite => {
+                if i < old_vec.len() {
+                    offset = item.update_cache(&old_vec[i], cache, offset)?;
+                } else {
+                    let cache = item.build_tree_hash_cache()?;
+                    leaves.append(&mut cache.into_merkle_tree());
+
+                    // Determine how many nodes were added by initializing a an overlay.
+                    let overlay = BTreeOverlay::new(item, offset)?;
+
+                    offset = overlay.next_node;
+                }
+            }
+        }
     }
 
     // Ensure the leaves are a power-of-two number of chunks
-    pad_leaves(&mut leaves);
+    // pad_leaves(&mut leaves);
 
     Ok(leaves)
 }
-*/
 
 fn build_vec_leaves<T>(vec: &Vec<T>) -> Result<Vec<u8>, Error>
 where

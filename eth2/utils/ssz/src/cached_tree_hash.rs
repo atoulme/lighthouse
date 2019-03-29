@@ -23,6 +23,13 @@ pub enum Error {
     NoChildrenForHashing((usize, usize)),
     CannotMerkleizeZeroLeaves,
     LeavesMustBePowerOfTwo,
+    ExpectedEqualLenLists(usize, usize),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ItemType {
+    Basic,
+    Composite,
 }
 
 pub trait CachedTreeHash<Other> {
@@ -38,21 +45,18 @@ pub trait CachedTreeHash<Other> {
 
     fn num_packable_bytes(&self) -> usize;
 
-    fn packable_bytes(
-        &self,
-        other: &Other,
-        cache: &mut TreeHashCache,
-        offset: usize,
-    ) -> Result<Vec<u8>, Error> {
-        self.update_cache(other, cache, offset)?;
-
-        let chunk = cache.get_chunk(offset)?;
-        Ok(chunk[0..self.num_packable_bytes()].to_vec())
-    }
+    fn item_type() -> ItemType;
 
     fn num_child_nodes(&self) -> usize {
         0
     }
+
+    /*
+    /// The number of nodes this item may consume, rounded up to the next integer.
+    ///
+    /// E.g., if the item can be packed and consume 1/4 of a node, it should return 1.
+    fn num_nodes(&self) -> usize;
+    */
 
     fn update_cache(
         &self,
@@ -284,7 +288,7 @@ fn num_nodes(num_leaves: usize) -> usize {
 pub struct BTreeOverlay {
     num_internal_nodes: usize,
     num_leaf_nodes: usize,
-    next_node: usize,
+    pub next_node: usize,
     offsets: Vec<usize>,
 }
 
