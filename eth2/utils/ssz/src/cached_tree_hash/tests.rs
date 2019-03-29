@@ -206,6 +206,8 @@ fn partial_modification_to_inner_struct() {
         .cached_hash_tree_root(&original_outer, &mut cache_struct, 0)
         .unwrap();
 
+    assert_eq!(cache_struct.total_modifications(), 5);
+
     let modified_cache: Vec<u8> = cache_struct.into();
 
     // Generate reference data.
@@ -259,6 +261,8 @@ fn partial_modification_to_outer() {
     modified_outer
         .cached_hash_tree_root(&original_outer, &mut cache_struct, 0)
         .unwrap();
+
+    assert_eq!(cache_struct.total_modifications(), 3);
 
     let modified_cache: Vec<u8> = cache_struct.into();
 
@@ -446,7 +450,7 @@ fn generic_test(index: usize) {
         .cached_hash_tree_root(&inner, &mut cache_struct, 0)
         .unwrap();
 
-    // assert_eq!(*cache_struct.hash_count, 3);
+    assert_eq!(cache_struct.total_modifications(), 3);
 
     let new_cache: Vec<u8> = cache_struct.into();
 
