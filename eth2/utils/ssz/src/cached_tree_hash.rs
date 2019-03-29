@@ -13,7 +13,7 @@ const MERKLE_HASH_CHUNCK: usize = 2 * BYTES_PER_CHUNK;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Error {
-    ShouldNotProduceOffsetHandler,
+    ShouldNotProduceBTreeOverlay,
     NoFirstNode,
     NoBytesForRoot,
     BytesAreNotEvenChunks(usize),
@@ -39,7 +39,7 @@ pub trait CachedTreeHash {
         &self,
         other: &Self::Item,
         cache: &mut TreeHashCache,
-        chunk: usize,
+        cache_offset: usize,
     ) -> Result<usize, Error>;
 }
 
@@ -70,7 +70,7 @@ impl TreeHashCache {
     where
         T: CachedTreeHash,
     {
-        let offset_handler = OffsetHandler::new(item, 0)?;
+        let offset_handler = BTreeOverlay::new(item, 0)?;
 
         // Note how many leaves were provided. If is not a power-of-two, we'll need to pad it out
         // later.
@@ -223,14 +223,14 @@ fn num_nodes(num_leaves: usize) -> usize {
 }
 
 #[derive(Debug)]
-pub struct OffsetHandler {
+pub struct BTreeOverlay {
     num_internal_nodes: usize,
     num_leaf_nodes: usize,
     next_node: usize,
     offsets: Vec<usize>,
 }
 
-impl OffsetHandler {
+impl BTreeOverlay {
     pub fn new<T>(item: &T, initial_offset: usize) -> Result<Self, Error>
     where
         T: CachedTreeHash,

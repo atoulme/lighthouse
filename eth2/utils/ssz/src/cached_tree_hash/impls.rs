@@ -13,7 +13,7 @@ impl CachedTreeHash for u64 {
     }
 
     fn offsets(&self) -> Result<Vec<usize>, Error> {
-        Err(Error::ShouldNotProduceOffsetHandler)
+        Err(Error::ShouldNotProduceBTreeOverlay)
     }
 
     fn num_child_nodes(&self) -> usize {
@@ -42,7 +42,7 @@ where
 {
     type Item = Self;
 
-    fn build_cache_bytes(&self) -> Vec<u8> {
+    fn build_tree_hash_cache(&self) -> Result<TreeHashCache, Error> {
         let num_packed_bytes = self.num_bytes();
         let num_leaves = num_sanitized_leaves(num_packed_bytes);
 
@@ -61,12 +61,20 @@ where
         self.iter().fold(0, |acc, item| acc + item.num_bytes())
     }
 
+    fn offsets(&self) -> Result<Vec<usize>, Error> {
+        Err(Error::ShouldNotProduceBTreeOverlay)
+    }
+
+    fn num_child_nodes(&self) -> usize {
+        0
+    }
+
     fn cached_hash_tree_root(
         &self,
-        other: &Self::Item,
+        other: &Self,
         cache: &mut TreeHashCache,
         chunk: usize,
-    ) -> Option<usize> {
+    ) -> Result<usize, Error> {
         let num_packed_bytes = self.num_bytes();
         let num_leaves = num_sanitized_leaves(num_packed_bytes);
 

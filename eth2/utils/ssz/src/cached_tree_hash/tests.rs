@@ -66,24 +66,24 @@ impl CachedTreeHash for Inner {
         cache: &mut TreeHashCache,
         chunk: usize,
     ) -> Result<usize, Error> {
-        let offset_handler = OffsetHandler::new(self, chunk)?;
+        let overlay = BTreeOverlay::new(self, chunk)?;
 
         // Skip past the internal nodes and update any changed leaf nodes.
         {
-            let chunk = offset_handler.first_leaf_node()?;
+            let chunk = overlay.first_leaf_node()?;
             let chunk = self.a.cached_hash_tree_root(&other.a, cache, chunk)?;
             let chunk = self.b.cached_hash_tree_root(&other.b, cache, chunk)?;
             let chunk = self.c.cached_hash_tree_root(&other.c, cache, chunk)?;
             let _chunk = self.d.cached_hash_tree_root(&other.d, cache, chunk)?;
         }
 
-        for (&parent, children) in offset_handler.iter_internal_nodes().rev() {
+        for (&parent, children) in overlay.iter_internal_nodes().rev() {
             if cache.either_modified(children)? {
                 cache.modify_chunk(parent, &cache.hash_children(children)?)?;
             }
         }
 
-        Ok(offset_handler.next_node())
+        Ok(overlay.next_node())
     }
 }
 
@@ -145,23 +145,23 @@ impl CachedTreeHash for Outer {
         cache: &mut TreeHashCache,
         chunk: usize,
     ) -> Result<usize, Error> {
-        let offset_handler = OffsetHandler::new(self, chunk)?;
+        let overlay = BTreeOverlay::new(self, chunk)?;
 
         // Skip past the internal nodes and update any changed leaf nodes.
         {
-            let chunk = offset_handler.first_leaf_node()?;
+            let chunk = overlay.first_leaf_node()?;
             let chunk = self.a.cached_hash_tree_root(&other.a, cache, chunk)?;
             let chunk = self.b.cached_hash_tree_root(&other.b, cache, chunk)?;
             let _chunk = self.c.cached_hash_tree_root(&other.c, cache, chunk)?;
         }
 
-        for (&parent, children) in offset_handler.iter_internal_nodes().rev() {
+        for (&parent, children) in overlay.iter_internal_nodes().rev() {
             if cache.either_modified(children)? {
                 cache.modify_chunk(parent, &cache.hash_children(children)?)?;
             }
         }
 
-        Ok(offset_handler.next_node())
+        Ok(overlay.next_node())
     }
 }
 
