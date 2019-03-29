@@ -9,7 +9,7 @@ pub struct Inner {
     pub d: u64,
 }
 
-impl CachedTreeHash for Inner {
+impl CachedTreeHash<Inner> for Inner {
     type Item = Self;
 
     fn build_tree_hash_cache(&self) -> Result<TreeHashCache, Error> {
@@ -24,6 +24,10 @@ impl CachedTreeHash for Inner {
         )?;
 
         Ok(tree)
+    }
+
+    fn num_packable_bytes(&self) -> usize {
+        HASHSIZE
     }
 
     fn num_bytes(&self) -> usize {
@@ -60,7 +64,7 @@ impl CachedTreeHash for Inner {
         num_nodes(leaves) + children - 1
     }
 
-    fn cached_hash_tree_root(
+    fn update_cache(
         &self,
         other: &Self,
         cache: &mut TreeHashCache,
@@ -71,10 +75,10 @@ impl CachedTreeHash for Inner {
         // Skip past the internal nodes and update any changed leaf nodes.
         {
             let chunk = overlay.first_leaf_node()?;
-            let chunk = self.a.cached_hash_tree_root(&other.a, cache, chunk)?;
-            let chunk = self.b.cached_hash_tree_root(&other.b, cache, chunk)?;
-            let chunk = self.c.cached_hash_tree_root(&other.c, cache, chunk)?;
-            let _chunk = self.d.cached_hash_tree_root(&other.d, cache, chunk)?;
+            let chunk = self.a.update_cache(&other.a, cache, chunk)?;
+            let chunk = self.b.update_cache(&other.b, cache, chunk)?;
+            let chunk = self.c.update_cache(&other.c, cache, chunk)?;
+            let _chunk = self.d.update_cache(&other.d, cache, chunk)?;
         }
 
         for (&parent, children) in overlay.iter_internal_nodes().rev() {
@@ -110,6 +114,10 @@ impl CachedTreeHash for Outer {
         Ok(tree)
     }
 
+    fn num_packable_bytes(&self) -> usize {
+        HASHSIZE
+    }
+
     fn num_bytes(&self) -> usize {
         let mut bytes = 0;
         bytes += self.a.num_bytes();
@@ -139,7 +147,7 @@ impl CachedTreeHash for Outer {
         Ok(offsets)
     }
 
-    fn cached_hash_tree_root(
+    fn update_cache(
         &self,
         other: &Self,
         cache: &mut TreeHashCache,
@@ -150,9 +158,9 @@ impl CachedTreeHash for Outer {
         // Skip past the internal nodes and update any changed leaf nodes.
         {
             let chunk = overlay.first_leaf_node()?;
-            let chunk = self.a.cached_hash_tree_root(&other.a, cache, chunk)?;
-            let chunk = self.b.cached_hash_tree_root(&other.b, cache, chunk)?;
-            let _chunk = self.c.cached_hash_tree_root(&other.c, cache, chunk)?;
+            let chunk = self.a.update_cache(&other.a, cache, chunk)?;
+            let chunk = self.b.update_cache(&other.b, cache, chunk)?;
+            let _chunk = self.c.update_cache(&other.c, cache, chunk)?;
         }
 
         for (&parent, children) in overlay.iter_internal_nodes().rev() {
@@ -203,7 +211,7 @@ fn partial_modification_to_inner_struct() {
     let mut cache_struct = TreeHashCache::new(&original_outer).unwrap();
 
     modified_outer
-        .cached_hash_tree_root(&original_outer, &mut cache_struct, 0)
+        .update_cache(&original_outer, &mut cache_struct, 0)
         .unwrap();
 
     assert_eq!(cache_struct.total_modifications(), 5);
@@ -259,7 +267,7 @@ fn partial_modification_to_outer() {
     let mut cache_struct = TreeHashCache::new(&original_outer).unwrap();
 
     modified_outer
-        .cached_hash_tree_root(&original_outer, &mut cache_struct, 0)
+        .update_cache(&original_outer, &mut cache_struct, 0)
         .unwrap();
 
     assert_eq!(cache_struct.total_modifications(), 3);
@@ -342,7 +350,7 @@ fn partial_modification_u64_vec() {
 
     // Perform a differential hash
     let mut cache_struct = TreeHashCache::from_bytes(original_cache.clone()).unwrap();
-    modified_vec.cached_hash_tree_root(&original_vec, &mut cache_struct, 0);
+    modified_vec.update_cache(&original_vec, &mut cache_struct, 0);
     let modified_cache: Vec<u8> = cache_struct.into();
 
     // Generate reference data.
@@ -447,7 +455,7 @@ fn generic_test(index: usize) {
     let mut cache_struct = TreeHashCache::from_bytes(cache.clone()).unwrap();
 
     changed_inner
-        .cached_hash_tree_root(&inner, &mut cache_struct, 0)
+        .update_cache(&inner, &mut cache_struct, 0)
         .unwrap();
 
     assert_eq!(cache_struct.total_modifications(), 3);

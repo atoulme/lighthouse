@@ -25,9 +25,7 @@ pub enum Error {
     LeavesMustBePowerOfTwo,
 }
 
-pub trait CachedTreeHash {
-    type Item: CachedTreeHash;
-
+pub trait CachedTreeHash<Other> {
     fn build_tree_hash_cache(&self) -> Result<TreeHashCache, Error>;
 
     /// Return the number of bytes when this element is encoded as raw SSZ _without_ length
@@ -42,7 +40,7 @@ pub trait CachedTreeHash {
 
     fn packable_bytes(
         &self,
-        other: &Self::Item,
+        other: &Other,
         cache: &mut TreeHashCache,
         offset: usize,
     ) -> Result<Vec<u8>, Error> {
@@ -58,7 +56,7 @@ pub trait CachedTreeHash {
 
     fn update_cache(
         &self,
-        other: &Self::Item,
+        other: &Other,
         cache: &mut TreeHashCache,
         cache_offset: usize,
     ) -> Result<usize, Error>;
@@ -79,7 +77,7 @@ impl Into<Vec<u8>> for TreeHashCache {
 impl TreeHashCache {
     pub fn new<T>(item: &T) -> Result<Self, Error>
     where
-        T: CachedTreeHash,
+        T: CachedTreeHash<T>,
     {
         item.build_tree_hash_cache()
     }
@@ -89,7 +87,7 @@ impl TreeHashCache {
         leaves_and_subtrees: Vec<Self>,
     ) -> Result<Self, Error>
     where
-        T: CachedTreeHash,
+        T: CachedTreeHash<T>,
     {
         let offset_handler = BTreeOverlay::new(item, 0)?;
 
@@ -293,7 +291,7 @@ pub struct BTreeOverlay {
 impl BTreeOverlay {
     pub fn new<T>(item: &T, initial_offset: usize) -> Result<Self, Error>
     where
-        T: CachedTreeHash,
+        T: CachedTreeHash<T>,
     {
         Self::from_lengths(initial_offset, item.offsets()?)
     }
