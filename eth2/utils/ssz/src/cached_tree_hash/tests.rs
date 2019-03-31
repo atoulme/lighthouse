@@ -10,8 +10,6 @@ pub struct Inner {
 }
 
 impl CachedTreeHash<Inner> for Inner {
-    type Item = Self;
-
     fn build_tree_hash_cache(&self) -> Result<TreeHashCache, Error> {
         let tree = TreeHashCache::from_leaves_and_subtrees(
             self,
@@ -24,6 +22,10 @@ impl CachedTreeHash<Inner> for Inner {
         )?;
 
         Ok(tree)
+    }
+
+    fn item_type() -> ItemType {
+        ItemType::Composite
     }
 
     fn num_packable_bytes(&self) -> usize {
@@ -98,9 +100,7 @@ pub struct Outer {
     pub c: u64,
 }
 
-impl CachedTreeHash for Outer {
-    type Item = Self;
-
+impl CachedTreeHash<Outer> for Outer {
     fn build_tree_hash_cache(&self) -> Result<TreeHashCache, Error> {
         let tree = TreeHashCache::from_leaves_and_subtrees(
             self,
@@ -112,6 +112,10 @@ impl CachedTreeHash for Outer {
         )?;
 
         Ok(tree)
+    }
+
+    fn item_type() -> ItemType {
+        ItemType::Composite
     }
 
     fn num_packable_bytes(&self) -> usize {
@@ -407,15 +411,16 @@ fn vec_of_u64_builds() {
 
 #[test]
 fn merkleize_odd() {
-    let data = join(vec![
+    let mut data = join(vec![
         int_to_bytes32(1),
         int_to_bytes32(2),
         int_to_bytes32(3),
         int_to_bytes32(4),
         int_to_bytes32(5),
     ]);
+    pad_leaves(&mut data);
 
-    let merkle = merkleize(sanitise_bytes(data)).unwrap();
+    let merkle = merkleize(data).unwrap();
 
     let expected_len = num_nodes(8) * BYTES_PER_CHUNK;
 

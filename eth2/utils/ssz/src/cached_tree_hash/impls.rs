@@ -35,6 +35,7 @@ impl CachedTreeHash<u64> for u64 {
     }
 }
 
+/*
 impl<T> CachedTreeHash<Vec<T>> for Vec<T>
 where
     T: CachedTreeHash<T> + Encodable + Sized,
@@ -261,4 +262,5 @@ where
 
     merkleize(leaves)
 }
+*/
 */
