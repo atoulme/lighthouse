@@ -1,5 +1,5 @@
 use super::*;
-use int_to_bytes::int_to_bytes32;
+use int_to_bytes::{int_to_bytes32, int_to_bytes8};
 
 #[derive(Clone)]
 pub struct Inner {
@@ -408,6 +408,52 @@ fn vec_of_u64_builds() {
     assert_eq!(expected, cache);
 }
 */
+
+fn compare_merkles(data: Vec<Vec<u8>>) {
+    let mut data = join(data);
+    let efficient_merkle = efficient_merkleize(&data).unwrap();
+
+    pad_leaves(&mut data);
+    let reference_merkle = merkleize(data).unwrap();
+
+    assert_eq!(reference_merkle[0..32], efficient_merkle[0..32]);
+}
+
+#[test]
+fn merkleize_efficient() {
+    // Single element
+    compare_merkles(vec![int_to_bytes32(1)]);
+    // Power of two
+    compare_merkles(vec![
+        int_to_bytes32(1),
+        int_to_bytes32(2),
+        int_to_bytes32(3),
+        int_to_bytes32(4),
+    ]);
+    // Not a power of two
+    compare_merkles(vec![
+        int_to_bytes32(1),
+        int_to_bytes32(2),
+        int_to_bytes32(3),
+        int_to_bytes32(4),
+        int_to_bytes32(5),
+    ]);
+    // Uneven power of two
+    compare_merkles(vec![
+        int_to_bytes32(1),
+        int_to_bytes32(2),
+        int_to_bytes32(3),
+        int_to_bytes8(4),
+    ]);
+    // Uneven not a power of two
+    compare_merkles(vec![
+        int_to_bytes32(1),
+        int_to_bytes32(2),
+        int_to_bytes32(3),
+        int_to_bytes32(4),
+        int_to_bytes8(5),
+    ]);
+}
 
 #[test]
 fn merkleize_odd() {

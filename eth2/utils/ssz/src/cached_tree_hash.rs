@@ -366,6 +366,51 @@ impl BTreeOverlay {
     }
 }
 
+pub fn efficient_merkleize(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    let leaves = num_sanitized_leaves(bytes.len());
+    let nodes = num_nodes(leaves);
+    let internal_nodes = nodes - leaves;
+
+    let num_bytes = internal_nodes * HASHSIZE + bytes.len();
+
+    let mut o: Vec<u8> = vec![0; internal_nodes * HASHSIZE];
+    o.append(&mut bytes.to_vec());
+
+    assert_eq!(o.len(), num_bytes);
+
+    let empty_chunk_hash = hash(&[0; MERKLE_HASH_CHUNCK]);
+
+    let mut i = nodes * HASHSIZE;
+    let mut j = internal_nodes * HASHSIZE;
+
+    while i >= MERKLE_HASH_CHUNCK {
+        i -= MERKLE_HASH_CHUNCK;
+
+        j -= HASHSIZE;
+        let hash = match o.get(i..i+MERKLE_HASH_CHUNCK) {
+            // All bytes are available, hash as ususal.
+            Some(slice) => hash(slice),
+            // Unable to get all the bytes.
+            None => {
+                match o.get(i..) {
+                    // Able to get some of the bytes, pad them out.
+                    Some(slice) => {
+                        let mut bytes = slice.to_vec();
+                        bytes.resize(MERKLE_HASH_CHUNCK, 0);
+                        hash(&bytes)
+                    },
+                    // Unable to get any bytes, use the empty-chunk hash.
+                    None => empty_chunk_hash.clone()
+                }
+            }
+        };
+
+        o[j..j + HASHSIZE].copy_from_slice(&hash);
+    }
+
+    Ok(o)
+}
+
 /// Split `values` into a power-of-two, identical-length chunks (padding with `0`) and merkleize
 /// them, returning the entire merkle tree.
 ///
