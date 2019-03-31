@@ -35,7 +35,6 @@ impl CachedTreeHash<u64> for u64 {
     }
 }
 
-/*
 impl<T> CachedTreeHash<Vec<T>> for Vec<T>
 where
     T: CachedTreeHash<T> + Encodable + Sized,
@@ -64,14 +63,10 @@ where
 
                 (0..num_leaves).collect()
             }
-            ItemType::Composite => {
-                self
-                    .iter()
-                    .map(|item| {
-                        item.offsets().iter().fold(0, |acc, o| acc + 0)
-                    })
-                    .collect()
-            }
+            ItemType::Composite => self
+                .iter()
+                .map(|item| item.offsets().iter().fold(0, |acc, o| acc + 0))
+                .collect(),
         };
 
         Ok(offsets)
@@ -102,14 +97,14 @@ where
             panic!("Need to handle a change in leaf count");
         }
 
+        /*
         // As `T::item_type()` is a static method on a type and a vec is a collection of identical
         // types, it's impossible for `Vec<T>` to contain two elements with a distinct `ItemType`.
         let leaves = match T::item_type() {
             ItemType::Basic => panic!("TODO"),
-            ItemType::Composite => update_cache_of_composites(self, other, cache, offset)
+            ItemType::Composite => update_cache_of_composites(self, other, cache, offset),
         }?;
 
-        /*
         let overlay = BTreeOverlay::new(self, chunk)?;
 
         let unpadded_leaves = build_vec_leaves_with_cache(self, other, cache, overlay.first_leaf_node()?);
@@ -146,7 +141,7 @@ where
         }
         */
 
-        Ok(next_node)
+        Ok(42)
     }
 }
 
@@ -154,27 +149,57 @@ fn get_leaves_for_composites<T>(
     new_vec: &Vec<T>,
     old_vec: &Vec<T>,
     cache: &mut TreeHashCache,
-    offset: usize,
+    mut offset: usize,
 ) -> Result<usize, Error>
 where
     T: CachedTreeHash<T> + Encodable,
 {
     assert_eq!(T::item_type(), ItemType::Composite);
 
-    // Build an output vec with an appropriate capacity.
-    let mut leaves = Vec::with_capacity(leaves_byte_len(new_vec));
+    if num_sanitized_leaves(old_vec.num_bytes()) != num_sanitized_leaves(new_vec.num_bytes()) {
+        // TODO: deal with case where sanitized number of leaves changes.
+        return Ok(42);
+    }
 
-    //  Build the leaves.
+    // Build an output vec with an appropriate capacity.
+    // let mut leaves = Vec::with_capacity(leaves_byte_len(new_vec));
+
+    // Iterate through the new vec and update each element.
     for (i, item) in new_vec.iter().enumerate() {
         if i < old_vec.len() {
             offset = item.update_cache(&old_vec[i], cache, offset)?;
         } else {
-            let cache = item.build_tree_hash_cache()?;
-            leaves.append(&mut cache.into_merkle_tree());
+            // Build a new element from scratch.
+            let item_cache = item.build_tree_hash_cache()?;
+            // Insert it into the tree.
+            cache.chunk_splice(offset..offset, item_cache.into_merkle_tree());
 
-            offset = overlay.next_node;
+            offset = BTreeOverlay::new(item, offset)?.next_node;
         }
     }
+
+    // Iterate through elements that exist in `old_vec` but not in `new_vec`.
+    if new_vec.len() < old_vec.len() {
+        let overlays_to_remove = old_vec
+            .iter()
+            .skip(new_vec.len())
+            .map(|item| {
+                let overlay = BTreeOverlay::new(item, offset)?;
+                offset = overlay.next_node;
+                Ok(overlay)
+            })
+            .collect::<Result<Vec<BTreeOverlay>, _>>()?;
+
+        let first_node = overlays_to_remove
+            .first()
+            .expect("List cannot be empty.")
+            .first_node()?;
+        let last_node = offset;
+
+        cache.chunk_splice(*first_node..last_node, vec![]);
+    }
+
+    Ok(offset)
 }
 
 fn build_vec_leaves_with_cache<T>(
@@ -262,5 +287,4 @@ where
 
     merkleize(leaves)
 }
-*/
 */

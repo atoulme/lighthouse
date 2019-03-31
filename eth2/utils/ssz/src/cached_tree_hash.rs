@@ -24,6 +24,7 @@ pub enum Error {
     CannotMerkleizeZeroLeaves,
     LeavesMustBePowerOfTwo,
     ExpectedEqualLenLists(usize, usize),
+    BTreeOverlayMustHaveFirstNode,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -328,6 +329,10 @@ impl BTreeOverlay {
             offsets,
             next_node,
         })
+    }
+
+    pub fn first_node(&self) -> Result<&usize, Error> {
+        self.offsets.first().ok_or_else(|| Error::BTreeOverlayMustHaveFirstNode)
     }
 
     pub fn total_nodes(&self) -> usize {
