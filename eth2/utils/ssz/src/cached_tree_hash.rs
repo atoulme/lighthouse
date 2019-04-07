@@ -6,7 +6,7 @@ use std::ops::Range;
 use std::vec::Splice;
 
 mod impls;
-mod tests;
+// mod tests;
 
 const BYTES_PER_CHUNK: usize = 32;
 const HASHSIZE: usize = 32;
@@ -20,11 +20,31 @@ pub enum Error {
     BytesAreNotEvenChunks(usize),
     NoModifiedFieldForChunk(usize),
     NoBytesForChunk(usize),
+    UnableToGetBytes(Range<usize>),
+    BytesTooShort(usize, usize),
     NoChildrenForHashing((usize, usize)),
     CannotMerkleizeZeroLeaves,
     LeavesMustBePowerOfTwo,
     ExpectedEqualLenLists(usize, usize),
     BTreeOverlayMustHaveFirstNode,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Op {
+    NoOp,
+    Skip(usize),
+    Update(Vec<u8>),
+    Insert(Vec<u8>),
+    Delete(usize),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum NodeStatus {
+    RemainedPadding,
+    BecamePadding,
+    BecameValue,
+    ValueUnchanged,
+    ValueChanged,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -44,6 +64,8 @@ pub trait CachedTreeHash<Other> {
         Err(Error::ShouldNotProduceBTreeOverlay)
     }
 
+    fn packing_factor() -> usize;
+
     fn num_packable_bytes(&self) -> usize;
 
     fn item_type() -> ItemType;
@@ -61,10 +83,10 @@ pub trait CachedTreeHash<Other> {
 
     fn update_cache(
         &self,
-        other: &Other,
-        cache: &mut TreeHashCache,
-        cache_offset: usize,
-    ) -> Result<usize, Error>;
+        other: Option<&Other>,
+        cache: &mut Vec<u8>,
+        end: usize,
+    ) -> Result<(usize, bool), Error>;
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -368,6 +390,10 @@ impl BTreeOverlay {
         let leaf_nodes = &self.offsets[self.num_internal_nodes..];
 
         leaf_nodes.iter()
+    }
+
+    pub fn lazily_update_merkle_root() {
+
     }
 }
 

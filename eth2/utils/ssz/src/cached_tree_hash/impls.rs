@@ -8,6 +8,10 @@ impl CachedTreeHash<u64> for u64 {
         Ok(TreeHashCache::from_bytes(single_leaf)?)
     }
 
+    fn packing_factor() -> usize {
+        HASHSIZE / 8
+    }
+
     fn num_packable_bytes(&self) -> usize {
         8
     }
@@ -20,24 +24,28 @@ impl CachedTreeHash<u64> for u64 {
         ItemType::Basic
     }
 
-    fn update_cache(
-        &self,
-        other: &u64,
-        cache: &mut TreeHashCache,
-        offset: usize,
-    ) -> Result<usize, Error> {
-        if self != other {
-            let leaf = merkleize(ssz_encode(self))?;
-            cache.modify_chunk(offset, &leaf)?;
-        }
+    fn update_cache(&self, other: Option<&u64>, cache: &mut Vec<u8>, end: usize) -> Result<(usize, bool), Error> {
+        let start = end
+            .checked_sub(self.num_bytes())
+            .ok_or_else(|| Error::BytesTooShort(end, cache.len()))?;
 
-        Ok(offset + 1)
+        let changed = if self != other {
+            cache
+                .get_mut(start..end)
+                .ok_or_else(|| Error::UnableToGetBytes(start..end))?
+                .copy_from_slice(&ssz_encode(self));
+            true
+        } else {
+            false
+        };
+
+        Ok((start, changed))
     }
 }
 
-impl<T> CachedTreeHash<Vec<T>> for Vec<T>
+impl<T> CachedTreeHash<&[T]> for &[T]
 where
-    T: CachedTreeHash<T> + Encodable + Sized,
+    T: PartialEq<T> + CachedTreeHash<T> + Encodable + Sized,
 {
     fn build_tree_hash_cache(&self) -> Result<TreeHashCache, Error> {
         let leaves = build_vec_leaves(self)?;
@@ -72,6 +80,10 @@ where
         Ok(offsets)
     }
 
+    fn packing_factor() -> usize {
+        1
+    }
+
     fn num_packable_bytes(&self) -> usize {
         HASHSIZE
     }
@@ -85,17 +97,89 @@ where
         0
     }
 
-    fn update_cache(
-        &self,
-        other: &Vec<T>,
-        cache: &mut TreeHashCache,
-        offset: usize,
-    ) -> Result<usize, Error> {
-        let num_packed_bytes = self.num_bytes();
+    fn update_cache(&self, other: Option<&&[T]>, cache: &mut Vec<u8>, end: usize) -> Result<(usize, bool), Error> {
+        // If this is the first build, use an empty vec as the previous value.
+        let empty_vec: Vec<T> = vec![];
+        let other = other.unwrap_or_else(|| &&empty_vec[..]);
+
+        let num_packed_bytes = std::cmp::max(self.num_bytes(), other.num_bytes());
         let num_leaves = num_sanitized_leaves(num_packed_bytes);
-        if num_leaves != num_sanitized_leaves(other.num_bytes()) {
-            panic!("Need to handle a change in leaf count");
+        let num_nodes = num_nodes(num_leaves);
+        let num_internal_nodes = num_nodes - num_leaves;
+
+        let operations = vec![Op::NoOp; num_internal_nodes];
+
+        let mut i = num_leaves;
+        while i > 0 {
+            let right = i;
+            let left = i - 1;
+
+            let (right_status, end) = node_status(
+                self.chunks(T::packing_factor()).skip(right / 2).next(),
+                other.chunks(T::packing_factor()).skip(right / 2).next(),
+                cache,
+                end,
+            );
+            let (left_status, end) = node_status(
+                self.chunks(T::packing_factor()).skip(left / 2).next(),
+                other.chunks(T::packing_factor()).skip(left / 2).next(),
+                cache,
+                end,
+            );
+
+            let parent_op = match (left_status, right_status) {
+                (_, NodeStatus::ValueChanged) | (NodeStatus::ValueChanged, _) => {
+                    // the value has changed. for basic, reserialize. for composite, rebuild.
+                }
+                (NodeStatus::BecameValue, _) => {
+                    // A left node was created, a new parent needs to be created.
+                }
+                (_, NodeStatus::BecameValue) => {
+                    // A right node was created, parent needs to be updated.
+                }
+                (NodeStatus::BecamePadding, _) => {
+                    // A left node was removed, parent needs to be removed.
+                }
+                (_, NodeStatus::BecamePadding) => {
+                    // A right node was removed, parent needs to be updated.
+                }
+                (NodeStatus::ValueUnchanged, NodeStatus::ValueUnchanged) => {
+                    // Neither of the nodes changed, nothing to do.
+                }
+                (NodeStatus::RemainedPadding, NodeStatus::RemainedPadding) => {
+                    // Neither of the nodes changed, nothing to do.
+                }
+                (NodeStatus::RemainedPadding, NodeStatus::ValueUnchanged) => {
+                    unreachable!(
+                        "Impossible for right node to have a value whilst left node is padding"
+                    );
+                }
+                (NodeStatus::ValueUnchanged, NodeStatus::RemainedPadding) => {
+                    // Neither of the nodes changed, nothing to do.
+                }
+            };
+
+            i -= 2;
         }
+
+        /*
+        for i in (0..num_leaves).step_by(2).rev() {
+            //
+        }
+
+        for (i, c) in (0..num_leaves)
+            .collect::<Vec<usize>>()
+            .chunks(2)
+            .enumerate()
+            .rev()
+        {}
+
+        let last_internal_node = {
+            let num_packed_bytes = other.num_bytes();
+            let num_leaves = num_sanitized_leaves(num_packed_bytes);
+            last_node - num_leaves
+        };
+        */
 
         /*
         // As `T::item_type()` is a static method on a type and a vec is a collection of identical
@@ -145,6 +229,71 @@ where
     }
 }
 
+fn process_values<T>(
+    new: Option<&[T]>,
+    old: Option<&[T]>,
+    cache: &mut Vec<u8>,
+    mut end: usize,
+) -> (Op, usize)
+where
+    T: PartialEq<T> + CachedTreeHash<T>,
+{
+    if new.is_none() && old.is_none() {
+        (Op::NoOp, end)
+    } else if new.is_none() {
+        (Op::Delete, end)
+    } else {
+        let mut modified = false;
+
+        end -= HASHSIZE * (HASHSIZE / T::packing_factor() - new.unwrap().len());
+
+        let len = std::cmp::max(new.len(), old.len());
+        for i in 0..len.rev()  {
+            (end, modified) = item.update_cache();
+        }
+    }
+
+
+    else if old.is_none() {
+        // TODO: update
+        (Op::Insert, ???)
+    } else if new == old {
+        (NodeStatus::ValueUnchanged, )
+    } else {
+        NodeStatus::ValueChanged
+    }
+
+}
+
+/*
+fn node_status<T>(
+    new: Option<&[T]>,
+    old: Option<&[T]>,
+    cache: &mut Vec<u8>,
+    mut end: usize,
+) -> (NodeStatus, usize)
+where
+    T: PartialEq<T> + CachedTreeHash<T>,
+{
+    if new.is_none() && old.is_none() {
+        (NodeStatus::RemainedPadding, end)
+    } else if new.is_none() {
+        (NodeStatus::BecamePadding, end)
+    } else if old.is_none() {
+        (NodeStatus::BecameValue, ???)
+    } else if new == old {
+        end -= HASHSIZE * (HASHSIZE / T::packing_factor() - new.unwrap().len());
+        for item in new.iter().rev() {
+            end = item.update_cache()
+        }
+        (NodeStatus::ValueUnchanged, )
+    } else {
+        NodeStatus::ValueChanged
+    }
+}
+*/
+
+/*
 fn get_leaves_for_composites<T>(
     new_vec: &Vec<T>,
     old_vec: &Vec<T>,
@@ -241,10 +390,11 @@ where
 
     Ok(leaves)
 }
+*/
 
-fn build_vec_leaves<T>(vec: &Vec<T>) -> Result<Vec<u8>, Error>
+fn build_vec_leaves<T>(vec: &[T]) -> Result<Vec<u8>, Error>
 where
-    T: CachedTreeHash<T> + Encodable,
+    T: CachedTreeHash<T> + PartialEq<T> + Encodable,
 {
     // Build an output vec with an appropriate capacity.
     let mut leaves = Vec::with_capacity(leaves_byte_len(vec));
@@ -261,9 +411,9 @@ where
 }
 
 /// Returns the number of bytes required to store the leaves for some `vec`.
-fn leaves_byte_len<T>(vec: &Vec<T>) -> usize
+fn leaves_byte_len<T>(vec: &[T]) -> usize
 where
-    T: CachedTreeHash<T> + Encodable,
+    T: CachedTreeHash<T> + PartialEq<T> + Encodable,
 {
     let num_packed_bytes = vec.num_bytes();
     let num_leaves = num_sanitized_leaves(num_packed_bytes);
